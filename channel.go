@@ -140,9 +140,13 @@ func (ch *stChannel) Init(data *clData, a uint32, b int, ath []byte) {
 				v = 15
 			} else if v >= 0x39 {
 				v = 1
-			} else {
-				v = int(scalelist[v])
 			}
+			// Defensive check to prevent panic, even though the logic above should handle it.
+			if v < 0 || v >= len(scalelist) {
+				// Fallback to a safe value if calculation is out of expected range.
+				v = 15
+			}
+			v = int(scalelist[v])
 		}
 		ch.scale[i] = byte(v)
 	}
@@ -239,7 +243,14 @@ func (ch *stChannel) BlockSet(a, b, c, d uint32) {
 		l := c - 1
 		for i := uint32(0); i < a; i++ {
 			for j := uint32(0); j < b && k < d; j++ {
-				ch.block[k] = d3listFloat[64+(ch.value[ch.valueIndex+i]-ch.value[l])] * ch.block[l]
+				// Clamp the index to prevent out-of-bounds panic.
+				idx := 64 + (int(ch.value[ch.valueIndex+i]) - int(ch.value[l]))
+				if idx < 0 {
+					idx = 0
+				} else if idx >= len(d3listFloat) {
+					idx = len(d3listFloat) - 1
+				}
+				ch.block[k] = d3listFloat[idx] * ch.block[l]
 				k++
 				l--
 			}
