@@ -140,13 +140,9 @@ func (ch *stChannel) Init(data *clData, a uint32, b int, ath []byte) {
 				v = 15
 			} else if v >= 0x39 {
 				v = 1
+			} else {
+				v = int(scalelist[v])
 			}
-			// Defensive check to prevent panic, even though the logic above should handle it.
-			if v < 0 || v >= len(scalelist) {
-				// Fallback to a safe value if calculation is out of expected range.
-				v = 15
-			}
-			v = int(scalelist[v])
 		}
 		ch.scale[i] = byte(v)
 	}
