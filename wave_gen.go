@@ -1,12 +1,13 @@
+// Package hca an HCA (High-Compression Audio) decoder.
+// This file (wave_gen.go) is responsible for building and writing the WAV file header.
 package hca
 
 import (
 	"encoding/binary"
 	"io"
-
-	"github.com/vazrupe/endibuf"
 )
 
+// stWaveHeader 是WAV文件头的顶层结构体, 它包含了所有可能的块(chunk).
 type stWaveHeader struct {
 	Riff *stWAVEriff
 	Smpl *stWAVEsmpl
@@ -27,42 +28,44 @@ func newWaveHeader() *stWaveHeader {
 		Data: newWaveData(),
 
 		RiffOk: true,
-		SmplOk: false,
-		NoteOk: false,
+		SmplOk: false, // 'smpl'块默认不写入, 仅在有循环信息时激活
+		NoteOk: false, // 'note'块默认不写入, 仅在有评论信息时激活
 		DataOk: true,
 	}
 }
 
-func (wv *stWaveHeader) Write(w *endibuf.Writer) {
+// Write 将完整的WAV头部信息写入指定的writer.
+// 它根据 RiffOk, SmplOk 等标志决定写入哪些块.
+func (wv *stWaveHeader) Write(w io.Writer, endian binary.ByteOrder) error {
+	var err error
 	if wv.RiffOk {
-		wv.Riff.Write(w)
+		err = wv.Riff.Write(w, endian)
+		if err != nil {
+			return err
+		}
 	}
 	if wv.SmplOk {
-		wv.Smpl.Write(w)
+		err = wv.Smpl.Write(w, endian)
+		if err != nil {
+			return err
+		}
 	}
 	if wv.NoteOk {
-		wv.Note.Write(w)
+		err = wv.Note.Write(w, endian)
+		if err != nil {
+			return err
+		}
 	}
 	if wv.DataOk {
-		wv.Data.Write(w)
+		err = wv.Data.Write(w, endian)
+		if err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (wv *stWaveHeader) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	if wv.RiffOk {
-		wv.Riff.NeoWrite(w, endian)
-	}
-	if wv.SmplOk {
-		wv.Smpl.NeoWrite(w, endian)
-	}
-	if wv.NoteOk {
-		wv.Note.NeoWrite(w, endian)
-	}
-	if wv.DataOk {
-		wv.Data.NeoWrite(w, endian)
-	}
-}
-
+// stWAVEriff 对应WAV文件中的 'RIFF' 和 'fmt ' 块.
 type stWAVEriff struct {
 	riff             []byte
 	riffSize         uint32
@@ -80,70 +83,30 @@ type stWAVEriff struct {
 func newWaveRiff() *stWAVEriff {
 	return &stWAVEriff{
 		riff:             []byte{'R', 'I', 'F', 'F'},
-		riffSize:         0,
 		wave:             []byte{'W', 'A', 'V', 'E'},
 		fmt:              []byte{'f', 'm', 't', ' '},
 		fmtSize:          0x10,
-		fmtType:          0,
-		fmtChannelCount:  0,
-		fmtSamplingRate:  0,
-		fmtSamplesPerSec: 0,
-		fmtSamplingSize:  0,
-		fmtBitCount:      0,
 	}
 }
 
-func (h *stWAVEriff) Write(w *endibuf.Writer) {
-	endianSave := w.Endian
+func (h *stWAVEriff) Write(w io.Writer, endian binary.ByteOrder) error {
+	if err := binary.Write(w, binary.BigEndian, h.riff); err != nil { return err }
+	if err := binary.Write(w, endian, h.riffSize); err != nil { return err }
+	if err := binary.Write(w, binary.BigEndian, h.wave); err != nil { return err }
+	if err := binary.Write(w, binary.BigEndian, h.fmt); err != nil { return err }
 
-	w.Endian = binary.BigEndian
-	w.WriteBytes(h.riff)
+	if err := binary.Write(w, endian, h.fmtSize); err != nil { return err }
+	if err := binary.Write(w, endian, h.fmtType); err != nil { return err }
+	if err := binary.Write(w, endian, h.fmtChannelCount); err != nil { return err }
+	if err := binary.Write(w, endian, h.fmtSamplingRate); err != nil { return err }
+	if err := binary.Write(w, endian, h.fmtSamplesPerSec); err != nil { return err }
+	if err := binary.Write(w, endian, h.fmtSamplingSize); err != nil { return err }
+	if err := binary.Write(w, endian, h.fmtBitCount); err != nil { return err }
 
-	w.Endian = binary.LittleEndian
-	w.WriteUint32(h.riffSize)
-
-	w.Endian = binary.BigEndian
-	w.WriteBytes(h.wave)
-	w.WriteBytes(h.fmt)
-
-	w.Endian = binary.LittleEndian
-	w.WriteUint32(h.fmtSize)
-	w.WriteUint16(h.fmtType)
-	w.WriteUint16(h.fmtChannelCount)
-	w.WriteUint32(h.fmtSamplingRate)
-	w.WriteUint32(h.fmtSamplesPerSec)
-	w.WriteUint16(h.fmtSamplingSize)
-	w.WriteUint16(h.fmtBitCount)
-
-	w.Endian = endianSave
+	return nil
 }
 
-func (h *stWAVEriff) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, h.riff)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, h.riffSize)
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, h.wave)
-	binary.Write(w, wEndian, h.fmt)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, h.fmtSize)
-	binary.Write(w, wEndian, h.fmtType)
-	binary.Write(w, wEndian, h.fmtChannelCount)
-	binary.Write(w, wEndian, h.fmtSamplingRate)
-	binary.Write(w, wEndian, h.fmtSamplesPerSec)
-	binary.Write(w, wEndian, h.fmtSamplingSize)
-	binary.Write(w, wEndian, h.fmtBitCount)
-
-	wEndian = endianSave
-}
-
+// stWAVEsmpl 对应WAV文件中的 'smpl' (sample) 块, 用于定义循环信息.
 type stWAVEsmpl struct {
 	smpl              []byte
 	smplSize          uint32
@@ -168,79 +131,36 @@ func newWaveSmpl() *stWAVEsmpl {
 	return &stWAVEsmpl{
 		smpl:              []byte{'s', 'm', 'p', 'l'},
 		smplSize:          0x3C,
-		manufacturer:      0,
-		product:           0,
-		samplePeriod:      0,
 		MIDIUnityNote:     0x3C,
-		MIDIPitchFraction: 0,
-		SMPTEFormat:       0,
-		SMPTEOffset:       0,
 		sampleLoops:       1,
 		samplerData:       0x18,
-		loopIdentifier:    0,
-		loopType:          0,
-		loopStart:         0,
-		loopEnd:           0,
-		loopFraction:      0,
-		loopPlayCount:     0,
 	}
 }
 
-func (s *stWAVEsmpl) Write(w *endibuf.Writer) {
-	endianSave := w.Endian
+func (s *stWAVEsmpl) Write(w io.Writer, endian binary.ByteOrder) error {
+	if err := binary.Write(w, binary.BigEndian, s.smpl); err != nil { return err }
 
-	w.Endian = binary.BigEndian
-	w.WriteBytes(s.smpl)
+	if err := binary.Write(w, endian, s.smplSize); err != nil { return err }
+	if err := binary.Write(w, endian, s.manufacturer); err != nil { return err }
+	if err := binary.Write(w, endian, s.product); err != nil { return err }
+	if err := binary.Write(w, endian, s.samplePeriod); err != nil { return err }
+	if err := binary.Write(w, endian, s.MIDIUnityNote); err != nil { return err }
+	if err := binary.Write(w, endian, s.MIDIPitchFraction); err != nil { return err }
+	if err := binary.Write(w, endian, s.SMPTEFormat); err != nil { return err }
+	if err := binary.Write(w, endian, s.SMPTEOffset); err != nil { return err }
+	if err := binary.Write(w, endian, s.sampleLoops); err != nil { return err }
+	if err := binary.Write(w, endian, s.samplerData); err != nil { return err }
+	if err := binary.Write(w, endian, s.loopIdentifier); err != nil { return err }
+	if err := binary.Write(w, endian, s.loopType); err != nil { return err }
+	if err := binary.Write(w, endian, s.loopStart); err != nil { return err }
+	if err := binary.Write(w, endian, s.loopEnd); err != nil { return err }
+	if err := binary.Write(w, endian, s.loopFraction); err != nil { return err }
+	if err := binary.Write(w, endian, s.loopPlayCount); err != nil { return err }
 
-	w.Endian = binary.LittleEndian
-	w.WriteUint32(s.smplSize)
-	w.WriteUint32(s.manufacturer)
-	w.WriteUint32(s.product)
-	w.WriteUint32(s.samplePeriod)
-	w.WriteUint32(s.MIDIUnityNote)
-	w.WriteUint32(s.MIDIPitchFraction)
-	w.WriteUint32(s.SMPTEFormat)
-	w.WriteUint32(s.SMPTEOffset)
-	w.WriteUint32(s.sampleLoops)
-	w.WriteUint32(s.samplerData)
-	w.WriteUint32(s.loopIdentifier)
-	w.WriteUint32(s.loopType)
-	w.WriteUint32(s.loopStart)
-	w.WriteUint32(s.loopEnd)
-	w.WriteUint32(s.loopFraction)
-	w.WriteUint32(s.loopPlayCount)
-
-	w.Endian = endianSave
+	return nil
 }
 
-func (s *stWAVEsmpl) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, s.smpl)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, s.smplSize)
-	binary.Write(w, wEndian, s.manufacturer)
-	binary.Write(w, wEndian, s.product)
-	binary.Write(w, wEndian, s.samplePeriod)
-	binary.Write(w, wEndian, s.MIDIUnityNote)
-	binary.Write(w, wEndian, s.MIDIPitchFraction)
-	binary.Write(w, wEndian, s.SMPTEFormat)
-	binary.Write(w, wEndian, s.SMPTEOffset)
-	binary.Write(w, wEndian, s.sampleLoops)
-	binary.Write(w, wEndian, s.samplerData)
-	binary.Write(w, wEndian, s.loopIdentifier)
-	binary.Write(w, wEndian, s.loopType)
-	binary.Write(w, wEndian, s.loopStart)
-	binary.Write(w, wEndian, s.loopEnd)
-	binary.Write(w, wEndian, s.loopFraction)
-	binary.Write(w, wEndian, s.loopPlayCount)
-
-	wEndian = endianSave
-}
-
+// stWAVEnote 对应WAV文件中的 'note' 块, 用于存储备注或评论信息.
 type stWAVEnote struct {
 	note     []byte
 	noteSize uint32
@@ -250,42 +170,32 @@ type stWAVEnote struct {
 
 func newWaveNote() *stWAVEnote {
 	return &stWAVEnote{
-		note:     []byte{'n', 'o', 't', 'e'},
-		noteSize: 0,
-		dwName:   0,
+		note: []byte{'n', 'o', 't', 'e'},
 	}
 }
 
-func (n *stWAVEnote) Write(w *endibuf.Writer) {
-	endianSave := w.Endian
+func (n *stWAVEnote) Write(w io.Writer, endian binary.ByteOrder) error {
+	if err := binary.Write(w, binary.BigEndian, n.note); err != nil { return err }
 
-	w.Endian = binary.BigEndian
-	w.WriteBytes(n.note)
+	if err := binary.Write(w, endian, n.noteSize); err != nil { return err }
+	if err := binary.Write(w, endian, n.dwName); err != nil { return err }
 
-	w.Endian = binary.LittleEndian
-	w.WriteUint32(n.noteSize)
-	w.WriteUint32(n.dwName)
-	w.WriteCString(n.comm)
+	// 写入带空终止符的字符串
+	if _, err := w.Write([]byte(n.comm)); err != nil { return err }
+	if err := binary.Write(w, endian, byte(0)); err != nil { return err }
 
-	w.Endian = endianSave
+	// 写入填充字节以对齐
+	padding := (4 - (len(n.comm)+1)%4) % 4
+	if padding > 0 {
+		if _, err := w.Write(make([]byte, padding)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
-func (n *stWAVEnote) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, n.note)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, n.noteSize)
-	binary.Write(w, wEndian, n.dwName)
-	binary.Write(w, wEndian, []byte(n.comm))
-	binary.Write(w, wEndian, byte(0))
-
-	wEndian = endianSave
-}
-
+// stWAVEdata 对应WAV文件中的 'data' 块, 它定义了实际音频数据块的开始和大小.
 type stWAVEdata struct {
 	data     []byte
 	dataSize uint32
@@ -293,32 +203,12 @@ type stWAVEdata struct {
 
 func newWaveData() *stWAVEdata {
 	return &stWAVEdata{
-		data:     []byte{'d', 'a', 't', 'a'},
-		dataSize: 0,
+		data: []byte{'d', 'a', 't', 'a'},
 	}
 }
 
-func (d *stWAVEdata) Write(w *endibuf.Writer) {
-	endianSave := w.Endian
-
-	w.Endian = binary.BigEndian
-	w.WriteBytes(d.data)
-
-	w.Endian = binary.LittleEndian
-	w.WriteUint32(d.dataSize)
-
-	w.Endian = endianSave
-}
-
-func (d *stWAVEdata) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, d.data)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, d.dataSize)
-
-	wEndian = endianSave
+func (d *stWAVEdata) Write(w io.Writer, endian binary.ByteOrder) error {
+	if err := binary.Write(w, binary.BigEndian, d.data); err != nil { return err }
+	if err := binary.Write(w, endian, d.dataSize); err != nil { return err }
+	return nil
 }

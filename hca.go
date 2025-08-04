@@ -1,83 +1,85 @@
 package hca
 
-import (
-	"github.com/vazrupe/endibuf"
-)
+import "sync"
 
-// Hca is Hca File Structor
-// Hca 是 HCA 文件结构体
+// Hca 结构体包含了HCA文件的所有解码参数和从文件头解析出的元数据.
 type Hca struct {
-	CiphKey1 uint32 // 密码密钥 1
-	CiphKey2 uint32 // 密码密钥 2
+	// --- 可配置选项 ---
+	CiphKey1 uint32  // 解密密钥1
+	CiphKey2 uint32  // 解密密钥2
+	Mode     int     // 输出WAV格式的位深度 (0=浮点, 8, 16, 24, 32)
+	Loop     int     // 强制循环次数, 0表示遵循文件内的循环设置
+	Volume   float32 // 音量缩放因子, 1.0为原始音量
 
-	Mode int // 写入模式（例如 16 位）
-	Loop int // 循环次数
-
-	Volume float32 // 音量
-
-	version    uint32 // 版本
-	dataOffset uint32 // 数据偏移量
-
-	channelCount uint32 // 通道数量
+	// --- HCA文件元数据 (由loadHeader填充) ---
+	version      uint32 // HCA版本
+	dataOffset   uint32 // 数据块起始偏移
+	channelCount uint32 // 声道数
 	samplingRate uint32 // 采样率
-	blockCount   uint32 // 块总数
-	fmtR01       uint32 // fmt chunk 中的 R01 字段
-	fmtR02       uint32 // fmt chunk 中的 R02 字段
+	blockCount   uint32 // 总块数
+	fmtR01       uint32 // 'fmt' chunk raw data
+	fmtR02       uint32 // 'fmt' chunk raw data
 
-	blockSize uint32 // 块大小
-	compR01   uint32 // comp chunk 中的 R01 字段
-	compR02   uint32 // comp chunk 中的 R02 字段
-	compR03   uint32 // comp chunk 中的 R03 字段
-	compR04   uint32 // comp chunk 中的 R04 字段
-	compR05   uint32 // comp chunk 中的 R05 字段
-	compR06   uint32 // comp chunk 中的 R06 字段
-	compR07   uint32 // comp chunk 中的 R07 字段
-	compR08   uint32 // comp chunk 中的 R08 字段
-	compR09   uint32 // comp chunk 中的 R09 字段
+	blockSize uint32 // 单个块的大小(字节)
+	compR01   uint32 // 'comp'/'dec' chunk raw data
+	compR02   uint32 // 'comp'/'dec' chunk raw data
+	compR03   uint32 // 'comp'/'dec' chunk raw data
+	compR04   uint32 // 'comp'/'dec' chunk raw data
+	compR05   uint32 // 'comp'/'dec' chunk raw data
+	compR06   uint32 // 'comp'/'dec' chunk raw data
+	compR07   uint32 // 'comp'/'dec' chunk raw data
+	compR08   uint32 // 'comp'/'dec' chunk raw data
+	compR09   uint32 // 'comp'/'dec' chunk raw data
 
-	vbrR01 uint32 // vbr chunk 中的 R01 字段
-	vbrR02 uint32 // vbr chunk 中的 R02 字段
+	vbrR01 uint32 // 'vbr' chunk raw data
+	vbrR02 uint32 // 'vbr' chunk raw data
 
-	athType uint32 // ATH 类型
+	athType uint32 // ATH(音响心理学模型)类型
 
-	loopStart uint32 // 循环开始块索引
-	loopEnd   uint32 // 循环结束块索引
-	loopR01   uint32 // loop chunk 中的 R01 字段
-	loopR02   uint32 // loop chunk 中的 R02 字段
-	loopFlg   bool   // 循环标志
+	loopStart uint32 // 循环起始块
+	loopEnd   uint32 // 循环结束块
+	loopR01   uint32 // 'loop' chunk raw data
+	loopR02   uint32 // 'loop' chunk raw data
+	loopFlg   bool   // 是否包含循环信息
 
-	ciphType uint32 // 密码类型
+	ciphType uint32 // 加密类型
 
-	rvaVolume float32 // 相对音量调整
+	rvaVolume float32 // RVA(相对音量增益)
 
-	commLen     uint32 // 注释长度
-	commComment string // 注释内容
+	commLen     uint32 // 备注长度
+	commComment string // 备注内容
 
-	ath    stATH   // ATH 数据结构（假设 stATH 已定义）
-	cipher *Cipher // 密码对象（假设 Cipher 已定义）
+	// --- 内部解码器组件 ---
+	ath     stATH           // ATH处理器
+	cipher  *Cipher         // 加密处理器
+	decoder *channelDecoder // 声道解码器
 
-	decoder *channelDecoder // 通道解码器（假设 channelDecoder 已定义）
-
-	saver func(f float32, w *endibuf.Writer) // 保存函数，用于将浮点样本写入 endibuf.Writer
+	// --- 性能优化: 缓冲区池 ---
+	// 这些池用于复用在样本格式转换期间的缓冲区, 以减少内存分配.
+	int8Pool    sync.Pool
+	int16Pool   sync.Pool
+	int32Pool   sync.Pool
+	float32Pool sync.Pool
+	byte24Pool  sync.Pool // 用于24位音频的特殊字节缓冲区
 }
 
-// Modes is writting mode num
-// Modes 是写入模式编号
+// Modes 定义了输出WAV文件的位深度模式.
 const (
-	ModeFloat = 0  // 浮点模式
-	Mode8Bit  = 8  // 8 位模式
-	Mode16Bit = 16 // 16 位模式
-	Mode24Bit = 24 // 24 位模式
-	Mode32Bit = 32 // 32 位模式
+	ModeFloat = 0  // 32位浮点
+	Mode8Bit  = 8  // 8位无符号整数
+	Mode16Bit = 16 // 16位有符号整数
+	Mode24Bit = 24 // 24位有符号整数 (以3字节存储)
+	Mode32Bit = 32 // 32位有符号整数
 )
 
-// NewDecoder is create hca with default option
-// NewDecoder 使用默认选项创建 HCA 解码器
+// NewDecoder 创建并返回一个带有默认参数的HCA解码器实例.
 func NewDecoder() *Hca {
-	return &Hca{CiphKey1: 0x30DBE1AB, // 默认密码密钥 1
-		CiphKey2: 0xCC554639,  // 默认密码密钥 2
-		Mode:     16,          // 默认模式为 16 位
-		Loop:     0,           // 默认循环次数为 0
-		Volume:   1.0,         // 默认音量为 1.0
-		cipher:   NewCipher()} // 创建新的密码对象
+	return &Hca{
+		CiphKey1: 0x30DBE1AB, // 默认解密密钥 1
+		CiphKey2: 0xCC554639, // 默认解密密钥 2
+		Mode:     Mode16Bit,  // 默认输出 16-bit WAV
+		Loop:     0,          // 默认不强制循环
+		Volume:   1.0,        // 默认音量
+		cipher:   NewCipher(),
+	}
 }
