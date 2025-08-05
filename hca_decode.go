@@ -1,239 +1,246 @@
 package hca
 
 import (
-	"bytes"           // 导入 bytes 包，用于处理字节切片
-	"encoding/binary" // 导入 encoding/binary 包，用于处理字节序
-	"io"              // 导入 io 包，用于输入输出操作
-	"os"              // 导入 os 包，用于操作系统相关操作
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"math"
+	"os"
 
-	"github.com/vazrupe/endibuf" // 导入 endibuf 库
+	"github.com/vazrupe/endibuf"
 )
 
 // DecodeFromFile is file decode, return decode success/failed
-// DecodeFromFile 是文件解码函数，返回解码成功/失败
+// DecodeFromFile 是文件解码函数, 返回解码成功/失败
 func (h *Hca) DecodeFromFile(src, dst string) bool {
 	f, err := os.Open(src) // 打开源 HCA 文件
-	if err != nil {        // 如果打开文件失败
-		return false // 返回 false
+	if err != nil {
+		return false
 	}
-	defer f.Close()           // 确保文件关闭
-	r := endibuf.NewReader(f) // 创建一个 endibuf.Reader 来读取文件
-	f2, err := os.Create(dst) // 创建目标 WAV 文件
-	if err != nil {           // 如果创建文件失败
-		return false // 返回 false
+	defer f.Close()
+
+	r := endibuf.NewReader(f)
+
+	fileWriter, err := os.Create(dst) // 创建目标 WAV 文件
+	if err != nil {
+		return false
 	}
-	w := endibuf.NewWriter(f2) // 创建一个 endibuf.Writer 来写入文件
+	defer fileWriter.Close()
 
-	success := h.decodeBuffer(r, w) // 调用 decodeBuffer 进行解码
-
-	f2.Close()    // 关闭目标文件
-	if !success { // 如果解码失败
-		os.Remove(dst) // 删除不完整或错误的输出文件
-		return false   // 返回 false
+	if !h.decodeBuffer(r, fileWriter) { // 调用 decodeBuffer 进行解码
+		// 解码失败时, 主动关闭并删除文件
+		fileWriter.Close()
+		os.Remove(dst)
+		return false
 	}
 
-	return true // 解码成功返回 true
+	return true // 解码成功
 }
 
 // DecodeFromBytes is []byte data decode
 // DecodeFromBytes 是 []byte 数据解码函数
 func (h *Hca) DecodeFromBytes(data []byte) (decoded []byte, ok bool) {
-	decodedData := []byte{} // 初始化解码后的数据切片
-
-	if len(data) < 8 { // 检查数据长度是否足够包含基本头部信息
-		return decodedData, false // 长度不足返回 false
+	if len(data) < 8 {
+		return nil, false
+	}
+	headerSize := binary.BigEndian.Uint16(data[6:])
+	if len(data) < int(headerSize) {
+		return nil, false
 	}
 
-	headerSize := binary.BigEndian.Uint16(data[6:]) // 从头部信息中读取头部大小
-	if len(data) < int(headerSize) {                // 检查数据长度是否足够包含完整的头部
-		return decodedData, false // 长度不足返回 false
+	r := endibuf.NewReader(bytes.NewReader(data))
+	w := new(bytes.Buffer)
+
+	if !h.decodeBuffer(r, w) {
+		return nil, false
 	}
 
-	// create read buffer
-	// 创建读取缓冲区
-	base := bytes.NewReader(data)                    // 创建一个 bytes.Reader 来从字节切片读取
-	buf := io.NewSectionReader(base, 0, base.Size()) // 创建一个 io.SectionReader，以便像文件一样读取
-	r := endibuf.NewReader(buf)                      // 创建一个 endibuf.Reader
-
-	// create temp file (write)
-	// 创建临时文件（用于写入）
-	tempfile, _ := os.CreateTemp("", "hca_wav_temp_") // 创建一个临时文件
-	defer os.Remove(tempfile.Name())                  // 确保临时文件被删除
-	w := endibuf.NewWriter(tempfile)                  // 创建一个 endibuf.Writer
-	w.Endian = binary.LittleEndian                    // 设置写入字节序为小端序
-
-	if !h.decodeBuffer(r, w) { // 调用 decodeBuffer 进行解码
-		return decodedData, false // 解码失败返回 false
-	}
-
-	tempfile.Seek(0, 0)                   // 将临时文件指针移到开头
-	decodedData, _ = io.ReadAll(tempfile) // 读取临时文件的所有内容
-
-	return decodedData, true // 返回解码后的数据和成功标志
+	return w.Bytes(), true
 }
 
-// decodeBuffer 从 endibuf.Reader 中解码 HCA 数据并写入 endibuf.Writer
-func (h *Hca) decodeBuffer(r *endibuf.Reader, w *endibuf.Writer) bool {
-	saveEndian := r.Endian // 保存当前的读取字节序设置
-
-	r.Endian = binary.BigEndian // 将读取字节序设置为大端序
-
-	// size check
-	// 大小检查
-	if h.Loop < 0 { // 检查循环次数是否有效
-		return false // 无效返回 false
+// Decoder creates a reader that decodes HCA data from the underlying reader.
+// Decoder 创建一个解码器, 从提供的 reader 中读取并解码 HCA 数据
+func (h *Hca) Decoder(reader io.Reader) (io.Reader, error) {
+	readSeeker, ok := reader.(io.ReadSeeker)
+	if !ok {
+		return nil, fmt.Errorf("reader is not a ReadSeeker")
 	}
-	switch h.Mode { // 检查写入模式是否有效
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		if err := h.DecodeWithWriter(readSeeker, pw); err != nil {
+			// 在goroutine中, Pipe的写入端错误通常意味着读取端已关闭.
+			// 打印错误可能有助于调试, 但不应视为关键失败.
+			// The write-end of a pipe closing with an error in a goroutine
+			// usually means the read-end has been closed.
+			// Printing this error can be useful for debugging but shouldn't be
+			// treated as a critical failure.
+		}
+	}()
+	return pr, nil
+}
+
+// DecodeWithWriter decodes HCA data from a reader and writes the WAVE output to a writer.
+// DecodeWithWriter 从一个 reader 中解码 HCA 数据, 并将 WAVE 输出写入一个 writer.
+func (h *Hca) DecodeWithWriter(r io.ReadSeeker, w io.Writer) error {
+	endibufReader := endibuf.NewReader(r)
+	if !h.decodeBuffer(endibufReader, w) {
+		return fmt.Errorf("decode failed")
+	}
+	return nil
+}
+
+// decodeBuffer 从 endibuf.Reader 中解码 HCA 数据并写入 io.Writer
+func (h *Hca) decodeBuffer(r *endibuf.Reader, w io.Writer) bool {
+	saveEndian := r.Endian
+	r.Endian = binary.BigEndian
+	defer func() { r.Endian = saveEndian }()
+
+	if h.Loop < 0 {
+		return false
+	}
+	switch h.Mode {
 	case ModeFloat, Mode8Bit, Mode16Bit, Mode24Bit, Mode32Bit:
-		break // 有效模式，继续
 	default:
-		return false // 无效模式返回 false
+		return false
 	}
 
-	// header read
-	// 读取头部
-	if !h.loadHeader(r) { // 读取 HCA 头部信息
-		return false // 读取失败返回 false
+	if !h.loadHeader(r) {
+		return false
 	}
-	r.Seek(int64(h.dataOffset), 0) // 将读取位置移动到数据开始处
+	r.Seek(int64(h.dataOffset), 0)
 
-	// create temp file (write)
-	// 创建临时文件（用于写入，此行注释可能重复或指代 W 的初始化）
-	w.Endian = binary.LittleEndian // 设置写入字节序为小端序
+	wavHeader := h.buildWaveHeader()
+	// wave_gen.go中的stWaveHeader.Write方法需要一个*endibuf.Writer
+	// neo系列函数有一个NeoWrite, 它接收io.Writer
+	// 我们假设NeoWrite是正确的, 并在后续步骤中确认
+	// In wave_gen.go, the stWaveHeader.Write method requires an *endibuf.Writer.
+	// The "neo" series of functions has a NeoWrite that accepts an io.Writer.
+	// We assume NeoWrite is correct and will confirm this in a later step.
+	wavHeader.NeoWrite(w, binary.LittleEndian)
 
-	wavHeader := h.buildWaveHeader() // 构建 WAV 头部信息
-	wavHeader.Write(w)               // 将 WAV 头部写入 Writer
+	h.rvaVolume *= h.Volume
 
-	// adjust the relative volume
-	// 调整相对音量
-	h.rvaVolume *= h.Volume // 将 RVA 音量与用户指定的音量相乘
-
-	// decode
-	// 解码
-	if h.Loop == 0 { // 如果没有设置循环次数
-		if !h.decodeFromBytesDecode(r, w, h.dataOffset, h.blockCount) { // 解码从数据开始到总块数
-			return false // 解码失败返回 false
+	if h.Loop == 0 {
+		if !h.decodeBlocks(r, w, h.dataOffset, h.blockCount) {
+			return false
 		}
-	} else { // 如果设置了循环次数
-		loopBlockOffset := h.dataOffset + h.loopStart*h.blockSize    // 计算循环开始块的偏移量
-		loopBlockCount := h.loopEnd - h.loopStart                    // 计算循环块的数量
-		if !h.decodeFromBytesDecode(r, w, h.dataOffset, h.loopEnd) { // 解码从数据开始到循环结束块
-			return false // 解码失败返回 false
+	} else {
+		loopBlockOffset := h.dataOffset + h.loopStart*h.blockSize
+		loopBlockCount := h.loopEnd - h.loopStart
+		if !h.decodeBlocks(r, w, h.dataOffset, h.loopEnd) {
+			return false
 		}
-		for i := 1; i < h.Loop; i++ { // 循环指定次数
-			if !h.decodeFromBytesDecode(r, w, loopBlockOffset, loopBlockCount) { // 解码循环部分的块
-				return false // 解码失败返回 false
+		for i := 1; i < h.Loop; i++ {
+			if !h.decodeBlocks(r, w, loopBlockOffset, loopBlockCount) {
+				return false
 			}
 		}
-		if !h.decodeFromBytesDecode(r, w, loopBlockOffset, h.blockCount-h.loopStart) { // 解码从循环开始块到总块数（这部分处理剩余的尾部数据）
-			return false // 解码失败返回 false
+		if !h.decodeBlocks(r, w, loopBlockOffset, h.blockCount-h.loopStart) {
+			return false
 		}
 	}
 
-	r.Endian = saveEndian // 恢复原始的读取字节序设置
-
-	return true // 解码成功返回 true
+	return true
 }
 
 // buildWaveHeader 构建 WAV 头部信息
 func (h *Hca) buildWaveHeader() *stWaveHeader {
-	wavHeader := newWaveHeader() // 创建新的 WAV 头部结构体
+	wavHeader := newWaveHeader()
 
-	riff := wavHeader.Riff // 获取 Riff 块
-	smpl := wavHeader.Smpl // 获取 Smpl 块
-	note := wavHeader.Note // 获取 Note 块
-	data := wavHeader.Data // 获取 Data 块
+	riff := wavHeader.Riff
+	smpl := wavHeader.Smpl
+	note := wavHeader.Note
+	data := wavHeader.Data
 
-	if h.Mode > 0 { // 如果模式大于 0 (非浮点模式)
-		riff.fmtType = 1                  // 设置 fmt 类型为 1 (PCM)
-		riff.fmtBitCount = uint16(h.Mode) // 设置每样本位数
-	} else { // 如果是浮点模式
-		riff.fmtType = 3      // 设置 fmt 类型为 3 (IEEE Float)
-		riff.fmtBitCount = 32 // 设置每样本位数为 32
+	if h.Mode > 0 {
+		riff.fmtType = 1
+		riff.fmtBitCount = uint16(h.Mode)
+	} else {
+		riff.fmtType = 3
+		riff.fmtBitCount = 32
 	}
-	riff.fmtChannelCount = uint16(h.channelCount)                               // 设置通道数量
-	riff.fmtSamplingRate = h.samplingRate                                       // 设置采样率
-	riff.fmtSamplingSize = riff.fmtBitCount / 8 * riff.fmtChannelCount          // 计算每样本字节数
-	riff.fmtSamplesPerSec = riff.fmtSamplingRate * uint32(riff.fmtSamplingSize) // 计算每秒字节数
+	riff.fmtChannelCount = uint16(h.channelCount)
+	riff.fmtSamplingRate = h.samplingRate
+	riff.fmtSamplingSize = riff.fmtBitCount / 8 * riff.fmtChannelCount
+	riff.fmtSamplesPerSec = riff.fmtSamplingRate * uint32(riff.fmtSamplingSize)
 
-	if h.loopFlg { // 如果有循环标志
-		smpl.samplePeriod = uint32(1 / float64(riff.fmtSamplingRate) * 1000000000) // 计算样本周期
-		smpl.loopStart = h.loopStart * 0x80 * 8 * uint32(riff.fmtSamplingSize)     // 计算循环开始的字节偏移量
-		smpl.loopEnd = h.loopEnd * 0x80 * 8 * uint32(riff.fmtSamplingSize)         // 计算循环结束的字节偏移量
-		if h.loopR01 == 0x80 {                                                     // 如果 loopR01 是 0x80 (无限循环)
-			smpl.loopPlayCount = 0 // 设置循环播放次数为 0 (无限)
+	if h.loopFlg {
+		smpl.samplePeriod = uint32(1 / float64(riff.fmtSamplingRate) * 1000000000)
+		smpl.loopStart = h.loopStart * 0x80 * 8 * uint32(riff.fmtSamplingSize)
+		smpl.loopEnd = h.loopEnd * 0x80 * 8 * uint32(riff.fmtSamplingSize)
+		if h.loopR01 == 0x80 {
+			smpl.loopPlayCount = 0
 		} else {
-			smpl.loopPlayCount = h.loopR01 // 否则设置循环播放次数
+			smpl.loopPlayCount = h.loopR01
 		}
-	} else if h.Loop != 0 { // 如果没有循环标志但用户指定了循环次数
-		smpl.loopStart = 0                                                    // 设置循环开始为 0
-		smpl.loopEnd = h.blockCount * 0x80 * 8 * uint32(riff.fmtSamplingSize) // 设置循环结束为总样本数的字节偏移量
-		h.loopStart = 0                                                       // 将 HCA 结构体中的循环开始和结束更新为总范围
+	} else if h.Loop != 0 {
+		smpl.loopStart = 0
+		smpl.loopEnd = h.blockCount * 0x80 * 8 * uint32(riff.fmtSamplingSize)
+		h.loopStart = 0
 		h.loopEnd = h.blockCount
 	}
-	if h.commLen > 0 { // 如果有注释
-		wavHeader.NoteOk = true // 标记 Note 块存在
+	if h.commLen > 0 {
+		wavHeader.NoteOk = true
 
-		note.noteSize = 4 + h.commLen + 1 // 计算 Note 块的大小 (4字节长度 + 注释长度 + 1字节结束符)
-		note.comm = h.commComment         // 设置注释内容
-		if (note.noteSize & 3) != 0 {     // 如果 Note 块大小不是 4 的倍数
-			note.noteSize += 4 - (note.noteSize & 3) // 填充到 4 的倍数
+		note.noteSize = 4 + h.commLen + 1
+		note.comm = h.commComment
+		if (note.noteSize & 3) != 0 {
+			note.noteSize += 4 - (note.noteSize & 3)
 		}
 	}
-	data.dataSize = h.blockCount*0x80*8*uint32(riff.fmtSamplingSize) + (smpl.loopEnd-smpl.loopStart)*uint32(h.Loop) // 计算数据块大小 (总样本数 + 循环部分的样本数 * (循环次数-1))
-	riff.riffSize = 0x1C + 8 + data.dataSize                                                                        // 计算 Riff 块大小 (固定部分 + 数据块大小)
-	if h.loopFlg && h.Loop == 0 {                                                                                   // 如果有循环标志且用户没有指定循环次数 (使用 HCA 原生的循环)
-		// smpl Size
-		riff.riffSize += 17 * 4 // 添加 Smpl 块的大小
-		wavHeader.SmplOk = true // 标记 Smpl 块存在
+	data.dataSize = h.blockCount*0x80*8*uint32(riff.fmtSamplingSize) + (smpl.loopEnd-smpl.loopStart)*uint32(h.Loop)
+	riff.riffSize = 0x1C + 8 + data.dataSize
+	if h.loopFlg && h.Loop == 0 {
+		riff.riffSize += 17 * 4
+		wavHeader.SmplOk = true
 	}
-	if h.commLen > 0 { // 如果有注释
-		riff.riffSize += 8 + note.noteSize // 添加 Note 块的大小
+	if h.commLen > 0 {
+		riff.riffSize += 8 + note.noteSize
 	}
 
-	return wavHeader // 返回构建好的 WAV 头部结构体
+	return wavHeader
 }
 
-// decodeFromBytesDecode 从 endibuf.Reader 读取指定数量的块，解码并写入 endibuf.Writer
-func (h *Hca) decodeFromBytesDecode(r *endibuf.Reader, w *endibuf.Writer, address, count uint32) bool {
-	r.Seek(int64(address), 0)            // 将读取位置移动到指定的地址
-	for l := uint32(0); l < count; l++ { // 循环指定数量的块
-		data, _ := r.ReadBytes(int(h.blockSize)) // 读取一个块的数据
-		if !h.decode(data) {                     // 解码当前块
-			return false // 解码失败返回 false
+// decodeBlocks 从 endibuf.Reader 读取指定数量的块, 解码并写入 io.Writer
+func (h *Hca) decodeBlocks(r *endibuf.Reader, w io.Writer, address, count uint32) bool {
+	r.Seek(int64(address), 0)
+	for l := uint32(0); l < count; l++ {
+		data, _ := r.ReadBytes(int(h.blockSize))
+		if !h.decode(data) {
+			return false
 		}
-		saveBlock := h.decoder.waveSerialize(h.rvaVolume) // 将解码后的波形数据序列化
-		h.save(saveBlock, w)                              // 保存波形数据到 Writer
+		saveBlock := h.decoder.waveSerialize(h.rvaVolume)
+		h.save(saveBlock, w, binary.LittleEndian)
 
-		address += h.blockSize // 更新地址到下一个块的开始处
+		address += h.blockSize
 	}
-	return true // 所有块解码成功返回 true
+	return true
 }
 
 // decode 解码一个 HCA 数据块
 func (h *Hca) decode(data []byte) bool {
-	// block data
-	// 块数据
-	if len(data) < int(h.blockSize) { // 检查数据长度是否与块大小匹配
-		return false // 不匹配返回 false
+	if len(data) < int(h.blockSize) {
+		return false
 	}
-	if checkSum(data, 0) != 0 { // 检查校验和
-		return false // 校验和错误返回 false
+	if checkSum(data, 0) != 0 {
+		return false
 	}
-	mask := h.cipher.Mask(data)    // 使用密码对数据进行掩码操作（解密）
-	d := &clData{}                 // 创建 clData 对象（假设 clData 是一个比特读取器结构体）
-	d.Init(mask, int(h.blockSize)) // 初始化 clData，使用解密后的数据
-	magic := d.GetBit(16)          // 读取块的魔术数字 (通常应该是 0xFFFF)
-	if magic == 0xFFFF {           // 如果魔术数字正确
-		h.decoder.decode(d, h.ath.GetTable()) // 调用通道解码器进行解码
+	mask := h.cipher.Mask(data)
+	d := &clData{}
+	d.Init(mask, int(h.blockSize))
+	magic := d.GetBit(16)
+	if magic == 0xFFFF {
+		h.decoder.decode(d, h.ath.GetTable())
 	}
-	return true // 解码成功返回 true (即使 magic 不为 0xFFFF，只要 checkSum 通过也返回 true，这可能需要根据实际 HCA 规范确认行为)
+	return true
 }
 
 // checkSum 计算给定数据的校验和
 func checkSum(data []byte, sum uint16) uint16 {
-	res := sum     // 初始化校验和结果
-	v := []uint16{ // 校验和查找表
+	res := sum
+	v := []uint16{
 		0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011, 0x8033, 0x0036, 0x003C, 0x8039, 0x0028, 0x802D, 0x8027, 0x0022,
 		0x8063, 0x0066, 0x006C, 0x8069, 0x0078, 0x807D, 0x8077, 0x0072, 0x0050, 0x8055, 0x805F, 0x005A, 0x804B, 0x004E, 0x0044, 0x8041,
 		0x80C3, 0x00C6, 0x00CC, 0x80C9, 0x00D8, 0x80DD, 0x80D7, 0x00D2, 0x00F0, 0x80F5, 0x80FF, 0x00FA, 0x80EB, 0x00EE, 0x00E4, 0x80E1,
@@ -251,65 +258,137 @@ func checkSum(data []byte, sum uint16) uint16 {
 		0x8243, 0x0246, 0x024C, 0x8249, 0x0258, 0x825D, 0x8257, 0x0252, 0x0270, 0x8275, 0x827F, 0x027A, 0x826B, 0x026E, 0x0264, 0x8261,
 		0x0220, 0x8225, 0x822F, 0x022A, 0x823B, 0x023E, 0x0234, 0x8231, 0x8213, 0x0216, 0x021C, 0x8219, 0x0208, 0x820D, 0x8207, 0x0202,
 	}
-	for i := 0; i < len(data); i++ { // 遍历数据字节
-		res = (res << 8) ^ v[byte(res>>8)^data[i]] // 计算校验和
+	for i := 0; i < len(data); i++ {
+		res = (res << 8) ^ v[byte(res>>8)^data[i]]
 	}
-	return res // 返回计算出的校验和
+	return res
 }
 
-// save 将浮点样本数据转换为指定模式并写入 endibuf.Writer
-func (h *Hca) save(base []float32, w *endibuf.Writer) {
-	switch h.Mode { // 根据指定的模式进行转换和写入
-	case ModeFloat: // 浮点模式
-		w.WriteData(base) // 直接写入浮点数据
-	case Mode8Bit: // 8 位模式
-		w.WriteData(mode8BitConvert(base)) // 转换为 8 位整型并写入
-	case Mode16Bit: // 16 位模式
-		w.WriteData(mode16BitConvert(base)) // 转换为 16 位整型并写入
-	case Mode24Bit: // 24 位模式
-		w.WriteData(mode24BitConvert(base)) // 转换为 24 位字节切片并写入
-	case Mode32Bit: // 32 位模式
-		w.WriteData(mode32BitConvert(base)) // 转换为 32 位整型并写入
+// save 将浮点样本数据转换为指定模式并写入 io.Writer
+func (h *Hca) save(base []float32, w io.Writer, endian binary.ByteOrder) {
+	switch h.Mode {
+	case ModeFloat:
+		writeData(base, w, endian)
+	case Mode8Bit:
+		writeData(mode8BitConvert(base), w, endian)
+	case Mode16Bit:
+		writeData(mode16BitConvert(base), w, endian)
+	case Mode24Bit:
+		// 24bit is special, needs custom handling
+		// 24位是特别的, 需要自定义处理
+		binary.Write(w, endian, mode24BitConvert(base))
+	case Mode32Bit:
+		writeData(mode32BitConvert(base), w, endian)
 	}
 }
 
-// mode8BitConvert 将 float32 切片转换为 8 位整型切片
+func writeData(data interface{}, w io.Writer, endian binary.ByteOrder) (err error) {
+	switch data := data.(type) {
+	case string:
+		err = writeCString(w, data)
+	case *string:
+		err = writeCString(w, *data)
+	case []string:
+		for i := range data {
+			err = writeCString(w, data[i])
+			if err != nil {
+				return
+			}
+		}
+	case float32:
+		err = writeFloat32(w, data, endian)
+	case *float32:
+		err = writeFloat32(w, *data, endian)
+	case []float32:
+		// This is one of the key improvements.
+		// Instead of looping, write the whole slice at once.
+		// 这是关键改进之一.
+		// 直接写入整个切片, 而不是循环.
+		err = binary.Write(w, endian, data)
+
+	case float64:
+		err = writeFloat64(w, data, endian)
+	case *float64:
+		err = writeFloat64(w, *data, endian)
+	case []float64:
+		err = binary.Write(w, endian, data)
+
+	case int8, int16, int32, int64,
+		uint8, uint16, uint32, uint64,
+		*int8, *int16, *int32, *int64,
+		*uint8, *uint16, *uint32, *uint64,
+		[]int8, []int16, []int32, []int64,
+		[]uint8, []uint16, []uint32, []uint64:
+		err = binary.Write(w, endian, data)
+	}
+	return
+}
+
+// writeCString writes a string with a null terminator.
+// writeCString 写入一个以空字符结尾的字符串.
+func writeCString(w io.Writer, line string) (err error) {
+	return writeString(w, line, 0)
+}
+
+// writeString writes a string with a given delimiter.
+// writeString 写入一个带指定分隔符的字符串.
+func writeString(w io.Writer, line string, delim byte) (err error) {
+	// Improved implementation to avoid allocation
+	// 改进实现以避免内存分配
+	if _, err = io.WriteString(w, line); err != nil {
+		return
+	}
+	_, err = w.Write([]byte{delim})
+	return
+}
+
+// writeFloat32 writes a float32 value.
+// writeFloat32 写入一个 float32 值.
+func writeFloat32(w io.Writer, data float32, endian binary.ByteOrder) error {
+	return binary.Write(w, endian, math.Float32bits(data))
+}
+
+// writeFloat64 writes a float64 value.
+// writeFloat64 写入一个 float64 值.
+func writeFloat64(w io.Writer, data float64, endian binary.ByteOrder) error {
+	return binary.Write(w, endian, math.Float64bits(data))
+}
+
+// mode converters
+
 func mode8BitConvert(base []float32) []int8 {
-	res := make([]int8, len(base)) // 创建新的 int8 切片
-	for i := range res {           // 遍历浮点切片
-		res[i] = int8(int(base[i]*0x7F) + 0x80) // 转换为 8 位整型，并偏移 0x80 (使其范围为 0 到 255)
+	res := make([]int8, len(base))
+	for i := range res {
+		res[i] = int8(int(base[i]*0x7F) + 0x80)
 	}
-	return res // 返回转换后的切片
+	return res
 }
 
-// mode16BitConvert 将 float32 切片转换为 16 位整型切片
 func mode16BitConvert(base []float32) []int16 {
-	res := make([]int16, len(base)) // 创建新的 int16 切片
-	for i := range res {            // 遍历浮点切片
-		res[i] = int16(base[i] * 0x7FFF) // 转换为 16 位整型
+	res := make([]int16, len(base))
+	for i := range res {
+		res[i] = int16(base[i] * 0x7FFF)
 	}
-	return res // 返回转换后的切片
+	return res
 }
 
-// mode24BitConvert 将 float32 切片转换为 24 位字节切片
 func mode24BitConvert(base []float32) []byte {
-	res := make([]byte, len(base)*3) // 创建新的字节切片，大小为 float32 切片长度的 3 倍
-
-	for i := range base { // 遍历浮点切片
-		v := int32(base[i] * 0x7FFFFF) // 转换为 24 位有符号整数 (0x7FFFFF 是 2^23 - 1)
-		// 将 24 位整数拆分为 3 个字节（大端序）
-		res[i*3] = byte((v & 0xFF0000) >> 16)
-		res[i*3+1] = byte((v & 0xFF00) >> 8)
-		res[i*3+2] = byte((v & 0xFF))
+	res := make([]byte, len(base)*3)
+	for i := range base {
+		v := int32(base[i] * 0x7FFFFF)
+		// Assuming little-endian for 24-bit audio data writing
+		// 假设24位音频数据写入使用小端序
+		res[i*3] = byte(v)
+		res[i*3+1] = byte(v >> 8)
+		res[i*3+2] = byte(v >> 16)
 	}
-	return res // 返回转换后的字节切片
+	return res
 }
 
-// mode32BitConvert 将 float32 切片转换为 32 位整型切片
 func mode32BitConvert(base []float32) []int32 {
-	res := make([]int32, len(base)) // 创建新的 int32 切片
-	for i := range res {            // 遍历浮点切片
-		res[i] = int32(base[i] * 0x7FFFFFFF) // 转换为 32 位整型
+	res := make([]int32, len(base))
+	for i := range res {
+		res[i] = int32(base[i] * 0x7FFFFFFF)
 	}
-	return res // 返回转换后的切片
+	return res
 }

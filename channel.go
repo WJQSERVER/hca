@@ -18,37 +18,15 @@ type stChannel struct {
 	wave   [8][0x80]float32
 }
 
+// newChannel creates a new channel with initialized slices.
+// The Go runtime ensures all other fields are zero-initialized.
+// newChannel 创建一个新通道并初始化切片.
+// Go运行时会确保所有其他字段都被零值初始化.
 func newChannel() *stChannel {
-	ch := stChannel{}
-	ch.block = make([]float32, 0x80)
-	for i := range ch.block {
-		ch.block[i] = 0
+	return &stChannel{
+		block:  make([]float32, 0x80),
+		wavTmp: make([]float32, 0x80),
 	}
-	for i := range ch.base {
-		ch.base[i] = 0
-	}
-	for i := range ch.value {
-		ch.value[i] = 0
-	}
-	for i := range ch.scale {
-		ch.scale[i] = 0
-	}
-	for i := range ch.value2 {
-		ch.value2[i] = 0
-	}
-	ch.chType = 0
-	ch.count = 0
-	ch.valueIndex = 0
-	ch.wavTmp = make([]float32, 0x80)
-	for i := range ch.wavTmp {
-		ch.wavTmp[i] = 0
-	}
-	for i := range ch.wave {
-		for j := range ch.wave[i] {
-			ch.wave[i][j] = 0
-		}
-	}
-	return &ch
 }
 
 var (

@@ -80,32 +80,21 @@ type stWAVEriff struct {
 func newWaveRiff() *stWAVEriff {
 	return &stWAVEriff{
 		riff:             []byte{'R', 'I', 'F', 'F'},
-		riffSize:         0,
 		wave:             []byte{'W', 'A', 'V', 'E'},
 		fmt:              []byte{'f', 'm', 't', ' '},
 		fmtSize:          0x10,
-		fmtType:          0,
-		fmtChannelCount:  0,
-		fmtSamplingRate:  0,
-		fmtSamplesPerSec: 0,
-		fmtSamplingSize:  0,
-		fmtBitCount:      0,
 	}
 }
 
 func (h *stWAVEriff) Write(w *endibuf.Writer) {
 	endianSave := w.Endian
-
 	w.Endian = binary.BigEndian
 	w.WriteBytes(h.riff)
-
 	w.Endian = binary.LittleEndian
 	w.WriteUint32(h.riffSize)
-
 	w.Endian = binary.BigEndian
 	w.WriteBytes(h.wave)
 	w.WriteBytes(h.fmt)
-
 	w.Endian = binary.LittleEndian
 	w.WriteUint32(h.fmtSize)
 	w.WriteUint16(h.fmtType)
@@ -114,34 +103,23 @@ func (h *stWAVEriff) Write(w *endibuf.Writer) {
 	w.WriteUint32(h.fmtSamplesPerSec)
 	w.WriteUint16(h.fmtSamplingSize)
 	w.WriteUint16(h.fmtBitCount)
-
 	w.Endian = endianSave
 }
 
+// NeoWrite writes the RIFF header to an io.Writer with specified endianness.
+// NeoWrite 将 RIFF 头部以指定的字节序写入一个 io.Writer.
 func (h *stWAVEriff) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, h.riff)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, h.riffSize)
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, h.wave)
-	binary.Write(w, wEndian, h.fmt)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, h.fmtSize)
-	binary.Write(w, wEndian, h.fmtType)
-	binary.Write(w, wEndian, h.fmtChannelCount)
-	binary.Write(w, wEndian, h.fmtSamplingRate)
-	binary.Write(w, wEndian, h.fmtSamplesPerSec)
-	binary.Write(w, wEndian, h.fmtSamplingSize)
-	binary.Write(w, wEndian, h.fmtBitCount)
-
-	wEndian = endianSave
+	binary.Write(w, binary.BigEndian, h.riff)
+	binary.Write(w, endian, h.riffSize)
+	binary.Write(w, binary.BigEndian, h.wave)
+	binary.Write(w, binary.BigEndian, h.fmt)
+	binary.Write(w, endian, h.fmtSize)
+	binary.Write(w, endian, h.fmtType)
+	binary.Write(w, endian, h.fmtChannelCount)
+	binary.Write(w, endian, h.fmtSamplingRate)
+	binary.Write(w, endian, h.fmtSamplesPerSec)
+	binary.Write(w, endian, h.fmtSamplingSize)
+	binary.Write(w, endian, h.fmtBitCount)
 }
 
 type stWAVEsmpl struct {
@@ -168,30 +146,16 @@ func newWaveSmpl() *stWAVEsmpl {
 	return &stWAVEsmpl{
 		smpl:              []byte{'s', 'm', 'p', 'l'},
 		smplSize:          0x3C,
-		manufacturer:      0,
-		product:           0,
-		samplePeriod:      0,
 		MIDIUnityNote:     0x3C,
-		MIDIPitchFraction: 0,
-		SMPTEFormat:       0,
-		SMPTEOffset:       0,
 		sampleLoops:       1,
 		samplerData:       0x18,
-		loopIdentifier:    0,
-		loopType:          0,
-		loopStart:         0,
-		loopEnd:           0,
-		loopFraction:      0,
-		loopPlayCount:     0,
 	}
 }
 
 func (s *stWAVEsmpl) Write(w *endibuf.Writer) {
 	endianSave := w.Endian
-
 	w.Endian = binary.BigEndian
 	w.WriteBytes(s.smpl)
-
 	w.Endian = binary.LittleEndian
 	w.WriteUint32(s.smplSize)
 	w.WriteUint32(s.manufacturer)
@@ -209,36 +173,29 @@ func (s *stWAVEsmpl) Write(w *endibuf.Writer) {
 	w.WriteUint32(s.loopEnd)
 	w.WriteUint32(s.loopFraction)
 	w.WriteUint32(s.loopPlayCount)
-
 	w.Endian = endianSave
 }
 
+// NeoWrite writes the smpl chunk to an io.Writer with specified endianness.
+// NeoWrite 将 smpl 区块以指定的字节序写入一个 io.Writer.
 func (s *stWAVEsmpl) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, s.smpl)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, s.smplSize)
-	binary.Write(w, wEndian, s.manufacturer)
-	binary.Write(w, wEndian, s.product)
-	binary.Write(w, wEndian, s.samplePeriod)
-	binary.Write(w, wEndian, s.MIDIUnityNote)
-	binary.Write(w, wEndian, s.MIDIPitchFraction)
-	binary.Write(w, wEndian, s.SMPTEFormat)
-	binary.Write(w, wEndian, s.SMPTEOffset)
-	binary.Write(w, wEndian, s.sampleLoops)
-	binary.Write(w, wEndian, s.samplerData)
-	binary.Write(w, wEndian, s.loopIdentifier)
-	binary.Write(w, wEndian, s.loopType)
-	binary.Write(w, wEndian, s.loopStart)
-	binary.Write(w, wEndian, s.loopEnd)
-	binary.Write(w, wEndian, s.loopFraction)
-	binary.Write(w, wEndian, s.loopPlayCount)
-
-	wEndian = endianSave
+	binary.Write(w, binary.BigEndian, s.smpl)
+	binary.Write(w, endian, s.smplSize)
+	binary.Write(w, endian, s.manufacturer)
+	binary.Write(w, endian, s.product)
+	binary.Write(w, endian, s.samplePeriod)
+	binary.Write(w, endian, s.MIDIUnityNote)
+	binary.Write(w, endian, s.MIDIPitchFraction)
+	binary.Write(w, endian, s.SMPTEFormat)
+	binary.Write(w, endian, s.SMPTEOffset)
+	binary.Write(w, endian, s.sampleLoops)
+	binary.Write(w, endian, s.samplerData)
+	binary.Write(w, endian, s.loopIdentifier)
+	binary.Write(w, endian, s.loopType)
+	binary.Write(w, endian, s.loopStart)
+	binary.Write(w, endian, s.loopEnd)
+	binary.Write(w, endian, s.loopFraction)
+	binary.Write(w, endian, s.loopPlayCount)
 }
 
 type stWAVEnote struct {
@@ -250,40 +207,29 @@ type stWAVEnote struct {
 
 func newWaveNote() *stWAVEnote {
 	return &stWAVEnote{
-		note:     []byte{'n', 'o', 't', 'e'},
-		noteSize: 0,
-		dwName:   0,
+		note: []byte{'n', 'o', 't', 'e'},
 	}
 }
 
 func (n *stWAVEnote) Write(w *endibuf.Writer) {
 	endianSave := w.Endian
-
 	w.Endian = binary.BigEndian
 	w.WriteBytes(n.note)
-
 	w.Endian = binary.LittleEndian
 	w.WriteUint32(n.noteSize)
 	w.WriteUint32(n.dwName)
 	w.WriteCString(n.comm)
-
 	w.Endian = endianSave
 }
 
+// NeoWrite writes the note chunk to an io.Writer with specified endianness.
+// NeoWrite 将 note 区块以指定的字节序写入一个 io.Writer.
 func (n *stWAVEnote) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, n.note)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, n.noteSize)
-	binary.Write(w, wEndian, n.dwName)
-	binary.Write(w, wEndian, []byte(n.comm))
-	binary.Write(w, wEndian, byte(0))
-
-	wEndian = endianSave
+	binary.Write(w, binary.BigEndian, n.note)
+	binary.Write(w, endian, n.noteSize)
+	binary.Write(w, endian, n.dwName)
+	binary.Write(w, endian, []byte(n.comm))
+	binary.Write(w, endian, byte(0))
 }
 
 type stWAVEdata struct {
@@ -293,32 +239,22 @@ type stWAVEdata struct {
 
 func newWaveData() *stWAVEdata {
 	return &stWAVEdata{
-		data:     []byte{'d', 'a', 't', 'a'},
-		dataSize: 0,
+		data: []byte{'d', 'a', 't', 'a'},
 	}
 }
 
 func (d *stWAVEdata) Write(w *endibuf.Writer) {
 	endianSave := w.Endian
-
 	w.Endian = binary.BigEndian
 	w.WriteBytes(d.data)
-
 	w.Endian = binary.LittleEndian
 	w.WriteUint32(d.dataSize)
-
 	w.Endian = endianSave
 }
 
+// NeoWrite writes the data chunk header to an io.Writer with specified endianness.
+// NeoWrite 将 data 区块的头部以指定的字节序写入一个 io.Writer.
 func (d *stWAVEdata) NeoWrite(w io.Writer, endian binary.ByteOrder) {
-	endianSave := endian
-	var wEndian binary.ByteOrder
-
-	wEndian = binary.BigEndian
-	binary.Write(w, wEndian, d.data)
-
-	wEndian = binary.LittleEndian
-	binary.Write(w, wEndian, d.dataSize)
-
-	wEndian = endianSave
+	binary.Write(w, binary.BigEndian, d.data)
+	binary.Write(w, endian, d.dataSize)
 }
