@@ -239,14 +239,7 @@ func (ch *stChannel) BlockSet(a, b, c, d uint32) {
 		l := c - 1
 		for i := uint32(0); i < a; i++ {
 			for j := uint32(0); j < b && k < d; j++ {
-				// Clamp the index to prevent out-of-bounds panic.
-				idx := 64 + (int(ch.value[ch.valueIndex+i]) - int(ch.value[l]))
-				if idx < 0 {
-					idx = 0
-				} else if idx >= len(d3listFloat) {
-					idx = len(d3listFloat) - 1
-				}
-				ch.block[k] = d3listFloat[idx] * ch.block[l]
+				ch.block[k] = d3listFloat[64+(ch.value[ch.valueIndex+i]-ch.value[l])] * ch.block[l]
 				k++
 				l--
 			}

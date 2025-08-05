@@ -25,16 +25,16 @@ var (
 )
 
 func init() {
-	// 定义命令行参数
-	saveDirFlag = flag.String("save", "", "指定输出WAV文件的目录 (默认为源文件所在目录)")
-	ciphKey1Flag = flag.Uint("c1", 0x30DBE1AB, "指定解密密钥1 (十六进制)")
-	ciphKey2Flag = flag.Uint("c2", 0xCC554639, "指定解密密钥2 (十六进制)")
-	modeFlag = flag.Int("m", 16, "指定输出WAV的位深度 (0=浮点, 8, 16, 24, 32)")
-	loopFlag = flag.Int("l", 0, "指定强制循环次数 (0=使用文件内设置)")
-	volumeFlag = flag.Float64("v", 1.0, "指定音量缩放因子 (例如 0.5, 1.0, 2.0)")
-	parallelFlag = flag.Int("p", runtime.NumCPU(), "指定并行解码的文件数量 (文件级并行)")
+	// 使用空字符串作为默认值，表示与源文件同目录
+	saveDirFlag = flag.String("save", "", "保存WAV文件的目录 (默认为源文件所在目录)")
+	ciphKey1Flag = flag.Uint("c1", 0x01395C51, "解密密钥1 (十六进制, 例如 0x01395C51)")
+	ciphKey2Flag = flag.Uint("c2", 0x00000000, "解密密钥2 (十六进制, 例如 0x00000000)")
+	modeFlag = flag.Int("m", 16, "解码输出位数 (0=浮点, 8, 16, 24, 32)")
+	loopFlag = flag.Int("l", 0, "循环次数 (0=使用文件内设置, >0=强制循环N次)")
+	volumeFlag = flag.Float64("v", 1.0, "音量缩放 (例如 0.5, 1.0, 1.5)")
+	parallelFlag = flag.Int("p", runtime.NumCPU(), "并行解码的文件数量 (默认为CPU核心数)")
 
-	// 自定义帮助信息
+	// 自定义 Usage 函数
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "HCA 文件解码器 (基于 go-hca 库)\n\n")
 		fmt.Fprintf(os.Stderr, "用法: %s [选项] <hca文件1> [hca文件2] ...\n\n", filepath.Base(os.Args[0]))
@@ -125,7 +125,6 @@ func processFile(hcaFilePath string) {
 	// 执行解码
 	log.Printf("正在处理: %s -> %s", hcaFilePath, outputFilePath)
 	if err := decoder.DecodeFromFile(hcaFilePath, outputFilePath); err != nil {
-		// 新版DecodeFromFile在失败时会自动删除目标文件, 这里只需打印错误信息
 		log.Printf("解码失败: %s. 错误: %v", hcaFilePath, err)
 	} else {
 		log.Printf("成功解码: %s", outputFilePath)
